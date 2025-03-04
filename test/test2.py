@@ -26,7 +26,10 @@ HEADERS = {
 USERNAME = os.getenv('WENKU_USER', 'badboy44')  # 优先从环境变量读取
 PASSWORD = os.getenv('WENKU_PASS', '123leijuikai')
 DELAY = 3
-SAVE_PATH = '/books'
+SAVE_PATH = 'books'
+MIRROR_RETRY_DELAY = 3  # 镜像重试间隔
+MIRROR_MAX_RETRIES = 2  # 单个镜像最大重试次数
+
 
 class LoginException(Exception):
     """自定义登录异常"""
@@ -114,6 +117,7 @@ def get_html(url: str, session: Session = None) -> str:
         print(f"请求失败: {str(e)}")
         return None
 
+
 def parse_novel_list(html: str) -> List[Dict]:
     """解析小说列表页面"""
     soup = BeautifulSoup(html, 'html.parser')
@@ -131,7 +135,7 @@ def parse_novel_list(html: str) -> List[Dict]:
             # 基础信息
             novel = {
                 '标题': title_tag.get_text(strip=True),
-                '链接': 'https://www.wenku8.net'+ title_tag['href'],
+                '链接': 'https://www.wenku8.net' + title_tag['href'],
                 '封面': item.select_one('img')['src'],
                 '作者': detail_div.select('p')[0].get_text().split(':')[-1].split('/')[0].strip(),
                 '出版社': detail_div.select('p')[0].get_text().split('/')[-1].split(':')[-1].strip(),
@@ -152,6 +156,7 @@ def parse_novel_list(html: str) -> List[Dict]:
             continue
 
     return novels
+
 
 # def save_to_excel(data: List[Dict], filename: str):
 #     """保存数据到Excel"""
@@ -186,11 +191,12 @@ def save_to_excel(data: List[Dict], filename: str):
                 print(f"错误：文件 {save_path} 被其他程序占用，请关闭Excel后重试")
                 return
 
-        # 显式指定模式并处理权限
-        with pd.ExcelWriter(save_path,
-                            engine='openpyxl',
-                            mode='w',  # 强制覆盖模式
-                            engine_kwargs={'options': {'strings_to_urls': False}}) as writer:
+        # 修改后的写入代码
+        with pd.ExcelWriter(
+                save_path,
+                engine='openpyxl',
+                mode='w'
+        ) as writer:
             df.to_excel(writer, index=False, columns=columns)
 
         print(f"成功保存 {len(df)} 条数据到 {save_path}")
@@ -200,12 +206,13 @@ def save_to_excel(data: List[Dict], filename: str):
     except Exception as e:
         print(f"保存失败：{str(e)}")
 
+
 def crawl_all_pages(start_page: int = 1, end_page: int = 5):
     """分页抓取小说数据"""
     all_novels = []
     session = create_authenticated_session()
 
-    for page in range(start_page, end_page+1):
+    for page in range(start_page, end_page + 1):
         try:
             url = f"{BASE_URL}{page}"
             html = get_html(url, session)
@@ -223,6 +230,7 @@ def crawl_all_pages(start_page: int = 1, end_page: int = 5):
             continue
 
     return all_novels
+
 
 # def parse_download_url(html: str) -> str:
 #     """解析小说详情页获取TXT下载页面链接"""
@@ -243,6 +251,7 @@ def parse_download_url(html: str) -> str:
     if download_link:
         return urljoin("https://www.wenku8.net", download_link['href'])
     raise ValueError("未找到全本下载链接")
+
 
 # def download_txt(novel: dict, session: Session, base_url: str = "https://www.wenku8.net"):
 #     """执行完整下载流程"""
@@ -294,8 +303,7 @@ def parse_download_url(html: str) -> str:
 #         print(f"下载失败：{str(e)}")
 
 def download_txt(novel: dict, session: Session, base_url: str = "https://www.wenku8.net"):
-    """智能下载流程（带镜像自动切换）"""
-    #统计下载结果和失败的书名
+    """智能下载流程（带镜像重试机制）"""
     try:
         # 获取下载页面
         download_page_url = parse_download_url(novel['html_content'])
@@ -312,7 +320,7 @@ def download_txt(novel: dict, session: Session, base_url: str = "https://www.wen
         # 提取所有简体镜像链接
         simplified_links = []
         for row in download_table.find_all('tr'):
-            if '简体(G)' in row.text:
+            if '简体' in row.text:
                 links = [urljoin(base_url, l['href'])
                          for l in row.find_all('a', href=True)
                          if 'type=txt' in l['href']]
@@ -325,75 +333,121 @@ def download_txt(novel: dict, session: Session, base_url: str = "https://www.wen
         # 智能下载逻辑
         success = False
         for idx, dl_url in enumerate(simplified_links, 1):
-            try:
-                print(f"尝试镜像{idx}: {dl_url}")
-                response = session.get(dl_url, stream=True, timeout=20)
+            retry_count = 0
+            max_retries = 2  # 最大重试次数
 
-                # 校验响应状态
-                response.raise_for_status()
+            while retry_count <= max_retries and not success:
+                try:
+                    print(f"尝试镜像{idx}{f' 第{retry_count + 1}次重试' if retry_count > 0 else ''}: {dl_url}")
+                    response = session.get(dl_url, stream=True, timeout=20)
+                    response.raise_for_status()
 
-                # 构建安全文件名
-                filename = f"{novel['标题']}_简体版.txt"
-                invalid_chars = {'/', '\\', ':', '*', '?', '"', '<', '>', '|'}
-                filename = ''.join([c if c not in invalid_chars else '_' for c in filename])
+                    # 构建安全文件名
+                    filename = f"{novel['标题']}_简体版.txt"
+                    invalid_chars = {'/', '\\', ':', '*', '?', '"', '<', '>', '|'}
+                    filename = ''.join([c if c not in invalid_chars else '_' for c in filename])
+                    save_path = os.path.join(SAVE_PATH, filename)
 
-                save_path = os.path.join(SAVE_PATH, filename)
+                    # 流式写入文件
+                    with open(save_path, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
 
-                # 流式写入文件
-                with open(save_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
+                    print(f"成功保存到：{save_path}")
+                    success = True
+                    break
 
-                print(f"成功保存到：{save_path}")
-                success = True
-                break  # 成功则终止循环
+                except requests.exceptions.RequestException as e:
+                    if retry_count < max_retries:
+                        print(f"镜像{idx}下载失败，3秒后重试... 错误：{str(e)}")
+                        time.sleep(3)
+                        retry_count += 1
+                    else:
+                        print(f"镜像{idx}超过最大重试次数，切换下一个镜像")
+                        break  # 跳出重试循环，切换镜像
 
-            except requests.exceptions.RequestException as e:
-                print(f"镜像{idx}下载失败：{str(e)}")
-                if idx < len(simplified_links):
-                    print("尝试下一个镜像...")
-                continue
+                except IOError as e:
+                    print(f"文件写入失败：{str(e)}")
+                    break  # 文件系统错误直接终止
 
-            except IOError as e:
-                print(f"文件写入失败：{str(e)}")
-                break  # 文件系统错误直接终止
+            if success:
+                break  # 成功则终止镜像循环
 
         if not success:
             raise Exception("所有镜像均不可用")
 
     except Exception as e:
         print(f"下载流程失败：{str(e)}")
-        raise  # 抛出异常给上层处理
+        raise
+
+
+def download_all(novels: list[dict], total_count: int):
+    # 初始化统计指标
+    start_time = time.time()
+    total_count = total_count
+    success_count = 0
+    fail_count = 0
+    total_size = 0  # 单位：字节
+    # 下载处理循环
+
+    for idx, novel in enumerate(novels, 1):
+        novel_title = novel['标题']
+        print(f"\n[{idx}/{total_count}] 正在处理：{novel_title}")
+
+        try:
+            # 获取详情页
+            novel['html_content'] = get_html(novel['链接'], auth_session)
+
+            # 执行下载
+            start_dl = time.time()
+            download_txt(novel, auth_session)
+
+            # 计算文件大小
+            filename = f"{novel_title}_简体版.txt".translate(str.maketrans('', '', r'\/:*?"<>|'))
+            file_path = os.path.join(SAVE_PATH, filename)
+            if os.path.exists(file_path):
+                file_size = os.path.getsize(file_path)
+                total_size += file_size
+                print(f"文件大小：{file_size / 1024:.2f} KB")
+
+            success_count += 1
+            time.sleep(2)
+
+        except Exception as e:
+            fail_count += 1
+            print(f"❗{novel_title} 处理失败：{str(e)}")
+            continue
+            # 统计结果输出
+    end_time = time.time()
+    time_cost = end_time - start_time
+    print("\n" + "=" * 40)
+    print("📊 任务统计报告")
+    print("-" * 40)
+    print(f"总处理数量：{total_count}")
+    print(f"✅ 成功数量：{success_count} ({success_count / total_count:.1%})")
+    print(f"❌ 失败数量：{fail_count} ({fail_count / total_count:.1%})")
+    print(f"⏱️ 总耗时：{time_cost // 3600:.0f}小时{time_cost % 3600 // 60:.0f}分{time_cost % 60:.2f}秒")
+    print(f"📦 总下载量：{total_size / 1024 / 1024:.2f} MB")
+    print("=" * 40)
+
+
 if __name__ == '__main__':
+
     # 初始化全局会话
     auth_session = create_authenticated_session()
-
-    # 确保保存目录存在
     os.makedirs(SAVE_PATH, exist_ok=True)
 
     # 抓取前2页数据
     novels_data = crawl_all_pages(start_page=1, end_page=2)
-
-    for novel in novels_data:
-        try:
-            print(f"\n开始处理：{novel['标题']}")
-            # 获取小说详情页
-            novel['html_content'] = get_html(novel['链接'], auth_session)
-
-            # 执行下载流程
-            download_txt(novel, auth_session)
-
-            #休眠1秒
-            time.sleep(1)
-
-        except Exception as e:
-            print(f"处理 {novel['标题']} 时出错：{str(e)}")
-            continue
+    total_count = len(novels_data)
 
     # 保存结果
     if novels_data:
         save_to_excel(novels_data, 'novels_list.xlsx')
+
+    # download_all(novels_data, total_count)
+
 # if __name__ == '__main__':
 #     # 初始化全局会话
 #     auth_session = create_authenticated_session()
@@ -415,8 +469,8 @@ if __name__ == '__main__':
 #     # 保存结果
 #     if novels_data:
 #         save_to_excel(novels_data, 'novels_list.xlsx')
-    # print(html_content)
-    # if html_content:
-    #     with open('output.html', 'w', encoding='gbk') as f:
-    #         f.write(html_content)
-    #     print("页面已保存至output.html")
+# print(html_content)
+# if html_content:
+#     with open('output.html', 'w', encoding='gbk') as f:
+#         f.write(html_content)
+#     print("页面已保存至output.html")
