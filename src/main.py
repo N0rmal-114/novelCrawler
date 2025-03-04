@@ -18,8 +18,8 @@ def main():
         # 初始化爬虫
         crawler = Crawler()
 
-        # 抓取前2页数据
-        novels_data = crawler.crawl_all_pages(start_page=1, end_page=2)
+        # 指定爬取页数,如果不指定，默认爬取第一页到最后一页
+        novels_data = crawler.crawl_all_pages(start_page=1)
         total_count = len(novels_data)
 
         # 保存结果

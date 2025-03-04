@@ -11,11 +11,12 @@ class Crawler:
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    def crawl_all_pages(self, start_page: int = 1, end_page: int = 5):
+    def crawl_all_pages(self, start_page: int = 1, end_page: int = None):
         """分页抓取小说数据"""
         all_novels = []
+        page = start_page
 
-        for page in range(start_page, end_page + 1):
+        while True:
             try:
                 url = f"{Config.BASE_URL}{page}"
                 self.logger.info(f"正在抓取第 {page} 页")
@@ -23,9 +24,15 @@ class Crawler:
 
                 if html:
                     novels = parse_novel_list(html)
+                    if not novels:  # 如果当前页没有数据，说明已经爬取完所有页
+                        break
                     all_novels.extend(novels)
                     self.logger.info(f"第 {page} 页抓取完成，累计 {len(all_novels)} 条数据")
                     time.sleep(Config.DELAY)
+                    page += 1
+
+                    if end_page and page > end_page:  # 如果指定了结束页，则停止爬取
+                        break
 
             except Exception as e:
                 self.logger.error(f"第 {page} 页抓取失败: {str(e)}", exc_info=True)
