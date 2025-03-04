@@ -446,7 +446,7 @@ if __name__ == '__main__':
     if novels_data:
         save_to_excel(novels_data, 'novels_list.xlsx')
 
-    # download_all(novels_data, total_count)
+    download_all(novels_data, total_count)
 
 # if __name__ == '__main__':
 #     # 初始化全局会话
