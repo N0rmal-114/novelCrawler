@@ -1,3 +1,5 @@
+from urllib.parse import urljoin
+
 import requests
 from requests import Session
 import re
@@ -24,6 +26,7 @@ HEADERS = {
 USERNAME = os.getenv('WENKU_USER', 'badboy44')  # 优先从环境变量读取
 PASSWORD = os.getenv('WENKU_PASS', '123leijuikai')
 DELAY = 3
+SAVE_PATH = '/books'
 
 class LoginException(Exception):
     """自定义登录异常"""
@@ -128,7 +131,7 @@ def parse_novel_list(html: str) -> List[Dict]:
             # 基础信息
             novel = {
                 '标题': title_tag.get_text(strip=True),
-                '链接': title_tag['href'],
+                '链接': 'https://www.wenku8.net'+ title_tag['href'],
                 '封面': item.select_one('img')['src'],
                 '作者': detail_div.select('p')[0].get_text().split(':')[-1].split('/')[0].strip(),
                 '出版社': detail_div.select('p')[0].get_text().split('/')[-1].split(':')[-1].strip(),
@@ -150,21 +153,52 @@ def parse_novel_list(html: str) -> List[Dict]:
 
     return novels
 
+# def save_to_excel(data: List[Dict], filename: str):
+#     """保存数据到Excel"""
+#     df = pd.DataFrame(data)
+#
+#     # 列顺序调整
+#     columns = ['标题', '作者', '出版社', '字数', '状态', '最后更新',
+#                '标签', '简介', '链接', '封面']
+#
+#     # 去重处理
+#     df = df.drop_duplicates(subset=['标题', '作者'])
+#
+#     with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+#         df.to_excel(writer, index=False, columns=columns)
+#
+#     print(f"已保存 {len(df)} 条数据到 {filename}")
 def save_to_excel(data: List[Dict], filename: str):
     """保存数据到Excel"""
-    df = pd.DataFrame(data)
+    try:
+        df = pd.DataFrame(data)
+        columns = ['标题', '作者', '出版社', '字数', '状态', '最后更新', '标签', '简介', '链接', '封面']
+        df = df.drop_duplicates(subset=['标题', '作者'])
 
-    # 列顺序调整
-    columns = ['标题', '作者', '出版社', '字数', '状态', '最后更新',
-               '标签', '简介', '链接', '封面']
+        # 使用绝对路径
+        save_path = os.path.abspath(filename)
 
-    # 去重处理
-    df = df.drop_duplicates(subset=['标题', '作者'])
+        # 检查文件是否被锁定
+        if os.path.exists(save_path):
+            try:
+                os.rename(save_path, save_path)  # 测试文件是否可操作
+            except OSError as e:
+                print(f"错误：文件 {save_path} 被其他程序占用，请关闭Excel后重试")
+                return
 
-    with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, columns=columns)
+        # 显式指定模式并处理权限
+        with pd.ExcelWriter(save_path,
+                            engine='openpyxl',
+                            mode='w',  # 强制覆盖模式
+                            engine_kwargs={'options': {'strings_to_urls': False}}) as writer:
+            df.to_excel(writer, index=False, columns=columns)
 
-    print(f"已保存 {len(df)} 条数据到 {filename}")
+        print(f"成功保存 {len(df)} 条数据到 {save_path}")
+
+    except PermissionError:
+        print(f"权限拒绝：请检查：1. 是否已关闭Excel文件 2. 是否有写权限 3. 尝试管理员模式运行")
+    except Exception as e:
+        print(f"保存失败：{str(e)}")
 
 def crawl_all_pages(start_page: int = 1, end_page: int = 5):
     """分页抓取小说数据"""
@@ -190,14 +224,197 @@ def crawl_all_pages(start_page: int = 1, end_page: int = 5):
 
     return all_novels
 
+# def parse_download_url(html: str) -> str:
+#     """解析小说详情页获取TXT下载页面链接"""
+#     soup = BeautifulSoup(html, 'html.parser')
+#
+#
+# def download_txt(novel: dict, session: Session, base_url: str = "https://www.wenku8.net"):
+#     """在下载页面通过下载链接开始下载"""
+def parse_download_url(html: str) -> str:
+    """从小说详情页解析TXT全本下载页面链接"""
+    soup = BeautifulSoup(html, 'html.parser')
 
+    # 定位TXT全本下载按钮
+    download_link = soup.find('a', string='TXT简繁全本')
+    if not download_link:
+        download_link = soup.find('a', href=lambda x: x and 'type=txtfull' in x)
+
+    if download_link:
+        return urljoin("https://www.wenku8.net", download_link['href'])
+    raise ValueError("未找到全本下载链接")
+
+# def download_txt(novel: dict, session: Session, base_url: str = "https://www.wenku8.net"):
+#     """执行完整下载流程"""
+#     try:
+#         # 第一步：获取下载页面
+#         download_page_url = parse_download_url(novel['html_content'])
+#         print(f"正在获取下载页面：{download_page_url}")
+#
+#         # 第二步：访问下载页面
+#         download_page = session.get(download_page_url)
+#         download_page.encoding = 'gbk'
+#
+#         # 第三步：解析下载链接
+#         soup = BeautifulSoup(download_page.text, 'html.parser')
+#         download_table = soup.find('table', {'class': 'grid'})
+#
+#         # 定位简体下载链接
+#         simplified_links = []
+#         for row in download_table.find_all('tr'):
+#             if '简体(G)' in row.text:
+#                 links = row.find_all('a', href=True)
+#                 simplified_links = [urljoin(base_url, l['href']) for l in links if 'type=txt' in l['href']]
+#                 break
+#
+#         if not simplified_links:
+#             raise ValueError("未找到简体下载链接")
+#
+#         # 第四步：下载文件
+#         for i, dl_url in enumerate(simplified_links[:2], 1):  # 取前2个镜像
+#             print(f"正在下载第{i}个镜像：{dl_url}")
+#             response = session.get(dl_url, stream=True)
+#
+#             # 从URL提取文件名
+#             filename = f"{novel['标题']}_简体版_{i}.txt"
+#             invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+#             for char in invalid_chars:
+#                 filename = filename.replace(char, '_')
+#
+#             save_path = os.path.join(SAVE_PATH, filename)
+#
+#             with open(save_path, 'wb') as f:
+#                 for chunk in response.iter_content(chunk_size=8192):
+#                     if chunk:
+#                         f.write(chunk)
+#             print(f"已保存到：{save_path}")
+#             time.sleep(DELAY)
+#
+#     except Exception as e:
+#         print(f"下载失败：{str(e)}")
+
+def download_txt(novel: dict, session: Session, base_url: str = "https://www.wenku8.net"):
+    """智能下载流程（带镜像自动切换）"""
+    #统计下载结果和失败的书名
+    try:
+        # 获取下载页面
+        download_page_url = parse_download_url(novel['html_content'])
+        print(f"正在解析下载页面：{download_page_url}")
+
+        # 访问下载页
+        download_page = session.get(download_page_url)
+        download_page.encoding = 'gbk'
+
+        # 解析下载选项
+        soup = BeautifulSoup(download_page.text, 'html.parser')
+        download_table = soup.find('table', {'class': 'grid'})
+
+        # 提取所有简体镜像链接
+        simplified_links = []
+        for row in download_table.find_all('tr'):
+            if '简体(G)' in row.text:
+                links = [urljoin(base_url, l['href'])
+                         for l in row.find_all('a', href=True)
+                         if 'type=txt' in l['href']]
+                simplified_links.extend(links)
+                break
+
+        if not simplified_links:
+            raise ValueError("未找到有效下载链接")
+
+        # 智能下载逻辑
+        success = False
+        for idx, dl_url in enumerate(simplified_links, 1):
+            try:
+                print(f"尝试镜像{idx}: {dl_url}")
+                response = session.get(dl_url, stream=True, timeout=20)
+
+                # 校验响应状态
+                response.raise_for_status()
+
+                # 构建安全文件名
+                filename = f"{novel['标题']}_简体版.txt"
+                invalid_chars = {'/', '\\', ':', '*', '?', '"', '<', '>', '|'}
+                filename = ''.join([c if c not in invalid_chars else '_' for c in filename])
+
+                save_path = os.path.join(SAVE_PATH, filename)
+
+                # 流式写入文件
+                with open(save_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+
+                print(f"成功保存到：{save_path}")
+                success = True
+                break  # 成功则终止循环
+
+            except requests.exceptions.RequestException as e:
+                print(f"镜像{idx}下载失败：{str(e)}")
+                if idx < len(simplified_links):
+                    print("尝试下一个镜像...")
+                continue
+
+            except IOError as e:
+                print(f"文件写入失败：{str(e)}")
+                break  # 文件系统错误直接终止
+
+        if not success:
+            raise Exception("所有镜像均不可用")
+
+    except Exception as e:
+        print(f"下载流程失败：{str(e)}")
+        raise  # 抛出异常给上层处理
 if __name__ == '__main__':
     # 初始化全局会话
     auth_session = create_authenticated_session()
 
-    # 测试访问
-    test_url = f"{BASE_URL}1"
-    html_content = get_html(test_url, auth_session)
+    # 确保保存目录存在
+    os.makedirs(SAVE_PATH, exist_ok=True)
+
+    # 抓取前2页数据
+    novels_data = crawl_all_pages(start_page=1, end_page=2)
+
+    for novel in novels_data:
+        try:
+            print(f"\n开始处理：{novel['标题']}")
+            # 获取小说详情页
+            novel['html_content'] = get_html(novel['链接'], auth_session)
+
+            # 执行下载流程
+            download_txt(novel, auth_session)
+
+            #休眠1秒
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"处理 {novel['标题']} 时出错：{str(e)}")
+            continue
+
+    # 保存结果
+    if novels_data:
+        save_to_excel(novels_data, 'novels_list.xlsx')
+# if __name__ == '__main__':
+#     # 初始化全局会话
+#     auth_session = create_authenticated_session()
+#
+#     # 测试访问
+#     # test_url = f"{BASE_URL}1"
+#     # html_content = get_html(test_url, auth_session)
+#
+#     # 抓取前5页数据
+#     novels_data = crawl_all_pages(start_page=1, end_page=2)
+#
+#     #从novels_data中访问每个小说的链接并从中下载TXT
+#     for novel in novels_data:
+#         novel_url = novel['链接']
+#         html_content = get_html(novel_url, auth_session)
+#         parse_download_url(html_content)
+#
+#
+#     # 保存结果
+#     if novels_data:
+#         save_to_excel(novels_data, 'novels_list.xlsx')
     # print(html_content)
     # if html_content:
     #     with open('output.html', 'w', encoding='gbk') as f:
