@@ -13,6 +13,17 @@ from src.tool.parser import parse_download_url
 def download_txt(novel: dict, session: Session, base_url: str = "https://www.wenku8.net"):
     """智能下载流程（带镜像重试机制）"""
     try:
+        # 构建安全文件名
+        filename = f"{novel['标题']}_简体版.txt"
+        invalid_chars = {'/', '\\', ':', '*', '?', '"', '<', '>', '|'}
+        filename = ''.join([c if c not in invalid_chars else '_' for c in filename])
+        save_path = os.path.join(Config.SAVE_PATH, filename)
+
+        # 如果文件已存在，则跳过下载
+        # if os.path.exists(save_path):
+        #     print(f"文件已存在，跳过下载：{save_path}")
+        #     return
+
         # 获取下载页面
         download_page_url = parse_download_url(novel['html_content'])
         print(f"正在解析下载页面：{download_page_url}")
@@ -50,12 +61,6 @@ def download_txt(novel: dict, session: Session, base_url: str = "https://www.wen
                     response = session.get(dl_url, stream=True, timeout=20)
                     response.raise_for_status()
 
-                    # 构建安全文件名
-                    filename = f"{novel['标题']}_简体版.txt"
-                    invalid_chars = {'/', '\\', ':', '*', '?', '"', '<', '>', '|'}
-                    filename = ''.join([c if c not in invalid_chars else '_' for c in filename])
-                    save_path = os.path.join(Config.SAVE_PATH, filename)
-
                     # 流式写入文件
                     with open(save_path, 'wb') as f:
                         for chunk in response.iter_content(chunk_size=8192):
@@ -63,6 +68,9 @@ def download_txt(novel: dict, session: Session, base_url: str = "https://www.wen
                                 f.write(chunk)
 
                     print(f"成功保存到：{save_path}")
+                    #释放资源
+                    response.close()
+
                     success = True
                     break
 

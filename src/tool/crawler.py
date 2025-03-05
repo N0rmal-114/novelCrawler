@@ -1,6 +1,9 @@
 import os
 import time
 import logging
+
+from tenacity import sleep
+
 from src.configs.config import Config
 from src.tool.auth import create_authenticated_session
 from src.tool.html_fetcher import get_html
@@ -56,6 +59,11 @@ class Crawler:
 
             try:
                 novel['html_content'] = get_html(novel['链接'], session)
+                #判断是否已下载过,如果文件夹中含有文件则跳过
+                if os.path.exists(os.path.join(Config.SAVE_PATH, f"{novel_title}_简体版.txt")):
+                    self.logger.info(f"文件已存在，跳过下载：{novel_title}")
+                    sleep(1)
+                    continue
                 download_txt(novel, session)
 
                 # 计算文件大小
@@ -65,6 +73,7 @@ class Crawler:
                     file_size = os.path.getsize(file_path)
                     total_size += file_size
                     self.logger.info(f"文件大小：{file_size / 1024:.2f} KB")
+
 
                 success_count += 1
                 time.sleep(2)
