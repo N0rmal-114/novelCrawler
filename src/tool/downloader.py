@@ -19,10 +19,10 @@ def download_txt(novel: dict, session: Session, base_url: str = "https://www.wen
         filename = ''.join([c if c not in invalid_chars else '_' for c in filename])
         save_path = os.path.join(Config.SAVE_PATH, filename)
 
-        # 如果文件已存在，则跳过下载
-        # if os.path.exists(save_path):
-        #     print(f"文件已存在，跳过下载：{save_path}")
-        #     return
+        # 检查 html_content 是否存在
+        if not novel.get('html_content'):
+            print(f"小说详情页内容为空，跳过下载：{novel['标题']}")
+            return
 
         # 获取下载页面
         download_page_url = parse_download_url(novel['html_content'])
